@@ -5,6 +5,7 @@ import os
 import json
 import time
 import subprocess
+import shutil
 
 # --- 설정 ---
 DOWNLOAD_FOLDER = "downloads"
@@ -17,7 +18,6 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 def download_video(url, cookie_path=None):
     """
     YouTube URL에서 비디오 정보를 추출하고 다운로드합니다.
-    cookie_path: 로봇 차단 우회를 위한 쿠키 파일 경로 (선택 사항)
     """
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
@@ -87,39 +87,61 @@ def parse_time_str(time_str):
 
 def process_video(input_path, start_sec, end_sec, video_id, index, template_path=None, chroma_key=None, layout_settings=None, video_on_top=True):
     """
-    영상 자르기 + 템플릿 적용 + 위치/크기 조절 + 레이어 순서 포함
+    [김지연 3.6 핵심 변경] 2단계 공정 (자르기 -> 합성) 적용으로 오류 해결
     """
     output_filename = f"{video_id}_shorts_{index+1}.mp4"
     output_path = os.path.join(OUTPUT_FOLDER, output_filename)
+    temp_cut_path = os.path.join(DOWNLOAD_FOLDER, f"temp_cut_{index}.mp4")
     
     scale_pct = layout_settings.get('scale', 100) if layout_settings else 100
     v_offset = layout_settings.get('v_offset', 0) if layout_settings else 0
     
-    # [핵심 변경] 입력 단계에서 미리 자르기 (Input Seeking)
-    # 이렇게 하면 처리 속도도 훨씬 빨라지고, 타임스탬프 오류도 해결됩니다.
-    command = ["ffmpeg", "-y"]
-    command.extend(["-ss", str(start_sec), "-to", str(end_sec), "-i", input_path])
+    # --- [1단계] 영상 먼저 자르기 (재인코딩으로 싱크/타임스탬프 완벽 보정) ---
+    cut_command = [
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-ss", str(start_sec), "-to", str(end_sec),
+        "-c:v", "libx264", "-preset", "fast",
+        "-c:a", "aac", "-b:a", "192k",
+        "-strict", "experimental",
+        temp_cut_path
+    ]
+    
+    try:
+        # 윈도우 팝업 숨김
+        startupinfo = None
+        if os.name == 'nt':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        
+        subprocess.run(cut_command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo)
+        
+    except subprocess.CalledProcessError as e:
+        st.error(f"1단계(자르기) 실패: {e}")
+        return None
+
+    # --- [2단계] 템플릿 합성 및 효과 적용 ---
+    # 이제 입력은 원본이 아니라, 이미 잘려진 temp_cut_path 입니다.
+    merge_command = ["ffmpeg", "-y", "-i", temp_cut_path]
     
     if template_path:
-        # 템플릿은 자르지 않고 무한 반복
-        command.extend(["-loop", "1", "-i", template_path])
+        merge_command.extend(["-loop", "1", "-i", template_path])
     
     filter_complex = ""
-    
     target_width = int(1080 * (scale_pct / 100))
     if target_width % 2 != 0: target_width -= 1
     
-    # 1. 템플릿이 있는 경우
+    # 템플릿이 있는 경우
     if template_path:
         if video_on_top:
-            # [CASE A] 영상 > 템플릿 (불투명 템플릿)
+            # [CASE A] 영상 > 템플릿
             filter_str = (
                 f"[1:v]scale=1080:1920,setsar=1[bg];"
                 f"[0:v]scale={target_width}:-2,setsar=1[fg];"
                 f"[bg][fg]overlay=(W-w)/2:(H-h)/2+{v_offset}:format=auto:shortest=1,format=yuv420p"
             )
         else:
-            # [CASE B] 템플릿 > 영상 (투명 구멍 템플릿)
+            # [CASE B] 템플릿 > 영상
             if chroma_key:
                 template_filter = f"[1:v]scale=1080:1920,colorkey={chroma_key['color']}:{chroma_key['similarity']}:{chroma_key['blend']},setsar=1[template];"
             else:
@@ -131,16 +153,14 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
                 f"{template_filter}"
                 f"[vid][template]overlay=0:0:shortest=1,format=yuv420p"
             )
-    
-    # 2. 템플릿이 없는 경우 (기본 가로 모드)
     else:
-        filter_str = "format=yuv420p" 
+        # 템플릿 없음 (포맷만 맞춤)
+        filter_str = "format=yuv420p"
 
     if template_path or filter_str != "format=yuv420p":
-        command.extend(["-filter_complex", filter_str])
-    
-    # 출력 시간 제한(-ss, -to)은 이미 입력 단계에서 처리했으므로 여기서는 제거
-    command.extend([
+        merge_command.extend(["-filter_complex", filter_str])
+        
+    merge_command.extend([
         "-c:v", "libx264", "-preset", "fast",
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k",
@@ -148,26 +168,26 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
         "-strict", "experimental",
         output_path
     ])
-    
+
     try:
-        startupinfo = None
-        if os.name == 'nt':
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        subprocess.run(merge_command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo)
+        
+        # 성공 시 임시 파일 삭제
+        if os.path.exists(temp_cut_path):
+            os.remove(temp_cut_path)
             
-        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo)
         return output_path
+        
     except subprocess.CalledProcessError as e:
-        st.error(f"FFmpeg Error: {e}")
+        st.error(f"2단계(합성) 실패: {e}")
         return None
 
 # --- UI 구성 ---
 
-# [업데이트] 버전: 김지연 3.5
-st.set_page_config(page_title="AI Shorts Maker Pro (김지연 3.5)", layout="wide")
+st.set_page_config(page_title="AI Shorts Maker Pro (김지연 3.6)", layout="wide")
 
-st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 3.5)")
-st.markdown("Gemini 2.5 Flash | **Input Seeking 패치 (오류 해결)** | **담당자: 김지연**")
+st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 3.6)")
+st.markdown("Gemini 2.5 Flash | **2-Step 공정 (오류 완전 해결)** | **담당자: 김지연**")
 
 with st.sidebar:
     st.header("⚙️ 기본 설정")
