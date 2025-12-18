@@ -119,20 +119,21 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
     if template_path:
         if video_on_top:
             # [CASE A] 영상 > 템플릿 (불투명 템플릿)
+            # [수정] setsar=1 추가 및 필터 라벨([bg], [fg]) 명시 강화로 오류 해결
             filter_str = (
-                f"[1:v]scale=1080:1920[bg];"
-                f"[0:v]scale={target_width}:-2[fg];"
+                f"[1:v]scale=1080:1920,setsar=1[bg];"
+                f"[0:v]scale={target_width}:-2,setsar=1[fg];"
                 f"[bg][fg]overlay=(W-w)/2:(H-h)/2+{v_offset}:format=auto,format=yuv420p"
             )
         else:
             # [CASE B] 템플릿 > 영상 (투명 구멍 템플릿)
             if chroma_key:
-                template_filter = f"[1:v]scale=1080:1920,colorkey={chroma_key['color']}:{chroma_key['similarity']}:{chroma_key['blend']}[template];"
+                template_filter = f"[1:v]scale=1080:1920,colorkey={chroma_key['color']}:{chroma_key['similarity']}:{chroma_key['blend']},setsar=1[template];"
             else:
-                template_filter = "[1:v]scale=1080:1920[template];"
+                template_filter = "[1:v]scale=1080:1920,setsar=1[template];"
 
             filter_str = (
-                f"[0:v]scale={target_width}:-2[scaled];"
+                f"[0:v]scale={target_width}:-2,setsar=1[scaled];"
                 f"[scaled]pad=1080:1920:(ow-iw)/2:(oh-ih)/2+{v_offset}:black[vid];"
                 f"{template_filter}"
                 f"[vid][template]overlay=0:0,format=yuv420p"
