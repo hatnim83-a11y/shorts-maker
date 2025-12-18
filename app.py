@@ -20,21 +20,29 @@ def download_video(url, cookie_path=None):
     """
     YouTube URL에서 비디오 정보를 추출하고 다운로드합니다.
     """
-    # [김지연 4.0] 파일명 패턴을 단순하고 확실하게 고정
+    # [김지연 4.0] 파일명 패턴 고정
     output_template = os.path.join(DOWNLOAD_FOLDER, 'video_%(id)s.%(ext)s')
     
+    # [김지연 4.1] 403 에러 회피를 위한 옵션 최적화
     ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        # 1. 포맷 제약 완화: 특정 코덱을 강제하지 않고 '가장 좋은 것'을 받아 나중에 mp4로 변환
+        'format': 'bestvideo+bestaudio/best',
         'outtmpl': output_template,
         'noplaylist': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         
-        # [김지연 4.0 핵심] 에러를 무시하지 않고 정면승부!
-        'ignoreerrors': False,  # 에러 발생 시 멈춤
-        'no_warnings': False,   # 경고 메시지 표시
-        'quiet': False,         # 로그 출력 켬
+        # 2. 브라우저 헤더 모방 (봇 탐지 회피)
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Referer': 'https://www.youtube.com/',
+        },
         
-        # 최종 결과물을 무조건 mp4로 병합
+        'ignoreerrors': False,
+        'no_warnings': False,
+        'quiet': False,
+        
+        # 최종 결과물을 무조건 mp4로 병합 (확장자 통일)
         'merge_output_format': 'mp4',
     }
     
@@ -43,7 +51,7 @@ def download_video(url, cookie_path=None):
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # 1. 정보 먼저 추출 (여기서 에러나면 바로 잡힘)
+            # 1. 정보 추출
             info_dict = ydl.extract_info(url, download=True)
             
             if not info_dict:
@@ -52,31 +60,25 @@ def download_video(url, cookie_path=None):
             video_id = info_dict.get('id', 'unknown')
             video_title = info_dict.get('title', 'video')
             
-            # [김지연 4.0] 파일 찾기 로직 (고정된 패턴 사용)
-            # 위에서 outtmpl을 'video_%(id)s.%(ext)s'로 줬고, merge_output_format이 'mp4'이므로
-            # 파일명은 무조건 'video_아이디.mp4' 여야 함.
+            # [김지연 4.0] 파일 찾기 로직
             expected_path = os.path.join(DOWNLOAD_FOLDER, f"video_{video_id}.mp4")
-            
-            # 절대 경로 변환
             video_path = os.path.abspath(expected_path)
             
             # 최종 확인
             if not os.path.exists(video_path):
-                 # 혹시 모르니 glob으로 한 번 더 확인 (video_아이디.* 패턴)
                  search_pattern = os.path.join(DOWNLOAD_FOLDER, f"video_{video_id}.*")
                  found = glob.glob(search_pattern)
                  
                  if found:
                      video_path = os.path.abspath(found[0])
                  else:
-                     # 진짜 파일이 없음 -> 디버깅 정보 출력
                      try:
                          files_in_dir = os.listdir(DOWNLOAD_FOLDER)
                      except:
                          files_in_dir = "폴더 조회 불가"
                          
                      raise FileNotFoundError(
-                         f"⚠️ 다운로드 완료 신호는 받았으나 파일을 찾을 수 없습니다.\n"
+                         f"⚠️ 파일을 찾을 수 없습니다.\n"
                          f"찾던 파일: {video_path}\n"
                          f"📂 현재 폴더 목록: {files_in_dir}"
                      )
@@ -84,8 +86,8 @@ def download_video(url, cookie_path=None):
         return video_path, video_title, video_id
 
     except yt_dlp.utils.DownloadError as e:
-        # yt-dlp 자체 에러 (차단, 비공개, 지역제한 등)
-        raise RuntimeError(f"YouTube 다운로드 실패 (yt-dlp 에러):\n{str(e)}")
+        # 403 등 다운로드 에러 메시지 그대로 전달
+        raise RuntimeError(f"{str(e)}")
     except Exception as e:
         raise RuntimeError(f"다운로드 중 알 수 없는 오류 발생:\n{str(e)}")
 
@@ -237,10 +239,10 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
 
 # --- UI 구성 ---
 
-st.set_page_config(page_title="AI Shorts Maker Pro (김지연 4.0)", layout="wide")
+st.set_page_config(page_title="AI Shorts Maker Pro (김지연 4.1)", layout="wide")
 
-st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 4.0)")
-st.markdown("Gemini 2.5 Flash | **강력한 디버깅 모드** | **담당자: 김지연**")
+st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 4.1)")
+st.markdown("Gemini 2.5 Flash | **403 에러 회피 패치** | **담당자: 김지연**")
 
 with st.sidebar:
     st.header("⚙️ 기본 설정")
@@ -250,7 +252,7 @@ with st.sidebar:
     uploaded_cookies = st.file_uploader(
         "🍪 유튜브 쿠키 파일 (cookies.txt)", 
         type=["txt"], 
-        help="서버 차단 시 'Get cookies.txt LOCALLY' 확장 프로그램으로 추출한 파일을 넣으세요."
+        help="서버 차단(403 에러) 시 'Get cookies.txt LOCALLY' 확장 프로그램으로 추출한 파일을 넣으세요."
     )
     
     cookie_path = None
@@ -258,7 +260,7 @@ with st.sidebar:
         cookie_path = os.path.join(DOWNLOAD_FOLDER, "cookies.txt")
         with open(cookie_path, "wb") as f:
             f.write(uploaded_cookies.getbuffer())
-        st.success("✅ 쿠키 적용됨")
+        st.success("✅ 쿠키 적용됨 (차단 우회 모드)")
     
     st.markdown("---")
     st.header("🎨 템플릿 설정")
@@ -358,6 +360,19 @@ if run_process:
                 # 에러 메시지를 있는 그대로 보여줌 (빨간 박스)
                 status.update(label="다운로드 실패", state="error")
                 st.error(f"{e}")
+                
+                # [김지연 4.1] 403 에러 감지 시 가이드 표시
+                if "403" in str(e):
+                    st.warning("🚨 **HTTP Error 403 감지됨!**")
+                    st.info("""
+                    유튜브가 현재 서버(클라우드)의 접근을 차단했습니다.
+                    왼쪽 사이드바의 **'🍪 유튜브 쿠키 파일'**을 업로드해야만 해결됩니다.
+                    
+                    **[해결 방법]**
+                    1. 크롬 확장프로그램 **'Get cookies.txt LOCALLY'** 설치
+                    2. 유튜브 홈페이지 접속 후 확장프로그램 아이콘 클릭 -> **'Export'**
+                    3. 다운받은 txt 파일을 왼쪽 사이드바에 업로드하고 다시 실행하세요.
+                    """)
                 st.stop()
             
             target_segments = []
