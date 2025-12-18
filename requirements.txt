@@ -1,0 +1,5 @@
+streamlit
+yt-dlp
+google-generativeai
+moviepy==1.0.3
+ffmpeg-python
