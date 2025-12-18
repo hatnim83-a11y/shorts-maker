@@ -6,7 +6,7 @@ import json
 import time
 import subprocess
 import shutil
-import glob # 파일 찾기용 모듈 추가
+import glob
 
 # --- 설정 ---
 DOWNLOAD_FOLDER = "downloads"
@@ -20,58 +20,74 @@ def download_video(url, cookie_path=None):
     """
     YouTube URL에서 비디오 정보를 추출하고 다운로드합니다.
     """
+    # [김지연 4.0] 파일명 패턴을 단순하고 확실하게 고정
+    output_template = os.path.join(DOWNLOAD_FOLDER, 'video_%(id)s.%(ext)s')
+    
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(id)s.%(ext)s'),
+        'outtmpl': output_template,
         'noplaylist': True,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'ignoreerrors': True,
-        'no_warnings': True,
-        # [김지연 3.9] 최종 결과물을 무조건 mp4로 병합하여 확장자 혼동 방지
+        
+        # [김지연 4.0 핵심] 에러를 무시하지 않고 정면승부!
+        'ignoreerrors': False,  # 에러 발생 시 멈춤
+        'no_warnings': False,   # 경고 메시지 표시
+        'quiet': False,         # 로그 출력 켬
+        
+        # 최종 결과물을 무조건 mp4로 병합
         'merge_output_format': 'mp4',
     }
     
     if cookie_path:
         ydl_opts['cookiefile'] = cookie_path
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info_dict = ydl.extract_info(url, download=True)
-        if not info_dict:
-            raise ValueError("영상 정보를 가져올 수 없습니다.")
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # 1. 정보 먼저 추출 (여기서 에러나면 바로 잡힘)
+            info_dict = ydl.extract_info(url, download=True)
             
-        video_id = info_dict.get('id', 'unknown')
-        video_title = info_dict.get('title', 'video')
-        
-        # [김지연 3.9 수정] 파일 찾기 로직 강화
-        # 1. 예상되는 파일 경로 (MP4 강제 옵션 덕분에 mp4일 확률 높음)
-        expected_filename = f"{video_id}.mp4"
-        video_path = os.path.join(DOWNLOAD_FOLDER, expected_filename)
-        
-        # 2. 만약 바로 안 보이면 glob으로 다시 검색 (혹시 mkv 등으로 저장되었을 경우 대비)
-        if not os.path.exists(video_path):
-            search_pattern = os.path.join(DOWNLOAD_FOLDER, f"{video_id}.*")
-            found_files = glob.glob(search_pattern)
+            if not info_dict:
+                raise ValueError("다운로드는 된 것 같지만 정보를 읽을 수 없습니다.")
+                
+            video_id = info_dict.get('id', 'unknown')
+            video_title = info_dict.get('title', 'video')
             
-            # .part 파일(다운로드 중인 임시파일)은 제외
-            valid_files = [f for f in found_files if not f.endswith('.part')]
+            # [김지연 4.0] 파일 찾기 로직 (고정된 패턴 사용)
+            # 위에서 outtmpl을 'video_%(id)s.%(ext)s'로 줬고, merge_output_format이 'mp4'이므로
+            # 파일명은 무조건 'video_아이디.mp4' 여야 함.
+            expected_path = os.path.join(DOWNLOAD_FOLDER, f"video_{video_id}.mp4")
             
-            if valid_files:
-                video_path = valid_files[0]
-        
-        # 절대 경로 변환
-        video_path = os.path.abspath(video_path)
-        
-        # 3. 최종 확인 및 디버깅 정보 제공
-        if not os.path.exists(video_path):
-             # 현재 폴더에 무슨 파일들이 있는지 확인 (디버깅용)
-             try:
-                 files_in_dir = os.listdir(DOWNLOAD_FOLDER)
-             except:
-                 files_in_dir = "폴더 조회 불가"
+            # 절대 경로 변환
+            video_path = os.path.abspath(expected_path)
+            
+            # 최종 확인
+            if not os.path.exists(video_path):
+                 # 혹시 모르니 glob으로 한 번 더 확인 (video_아이디.* 패턴)
+                 search_pattern = os.path.join(DOWNLOAD_FOLDER, f"video_{video_id}.*")
+                 found = glob.glob(search_pattern)
                  
-             raise FileNotFoundError(f"파일을 찾을 수 없습니다: {video_path}\n📂 현재 다운로드 폴더 파일 목록: {files_in_dir}")
+                 if found:
+                     video_path = os.path.abspath(found[0])
+                 else:
+                     # 진짜 파일이 없음 -> 디버깅 정보 출력
+                     try:
+                         files_in_dir = os.listdir(DOWNLOAD_FOLDER)
+                     except:
+                         files_in_dir = "폴더 조회 불가"
+                         
+                     raise FileNotFoundError(
+                         f"⚠️ 다운로드 완료 신호는 받았으나 파일을 찾을 수 없습니다.\n"
+                         f"찾던 파일: {video_path}\n"
+                         f"📂 현재 폴더 목록: {files_in_dir}"
+                     )
 
-    return video_path, video_title, video_id
+        return video_path, video_title, video_id
+
+    except yt_dlp.utils.DownloadError as e:
+        # yt-dlp 자체 에러 (차단, 비공개, 지역제한 등)
+        raise RuntimeError(f"YouTube 다운로드 실패 (yt-dlp 에러):\n{str(e)}")
+    except Exception as e:
+        raise RuntimeError(f"다운로드 중 알 수 없는 오류 발생:\n{str(e)}")
 
 def analyze_video_points(api_key, video_path, user_prompt):
     try:
@@ -221,10 +237,10 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
 
 # --- UI 구성 ---
 
-st.set_page_config(page_title="AI Shorts Maker Pro (김지연 3.9)", layout="wide")
+st.set_page_config(page_title="AI Shorts Maker Pro (김지연 4.0)", layout="wide")
 
-st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 3.9)")
-st.markdown("Gemini 2.5 Flash | **MP4 강제 변환 & 경로 추적 강화** | **담당자: 김지연**")
+st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 4.0)")
+st.markdown("Gemini 2.5 Flash | **강력한 디버깅 모드** | **담당자: 김지연**")
 
 with st.sidebar:
     st.header("⚙️ 기본 설정")
@@ -335,8 +351,13 @@ if run_process:
             try:
                 # 쿠키 경로 전달
                 video_path, video_title, video_id = download_video(youtube_url, cookie_path)
+                # 다운로드 성공 메시지 명시적 출력
+                status.write(f"✅ 다운로드 성공: {video_title}")
+                
             except Exception as e:
-                st.error(f"다운로드 실패: {e}")
+                # 에러 메시지를 있는 그대로 보여줌 (빨간 박스)
+                status.update(label="다운로드 실패", state="error")
+                st.error(f"{e}")
                 st.stop()
             
             target_segments = []
