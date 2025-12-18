@@ -95,13 +95,14 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
     scale_pct = layout_settings.get('scale', 100) if layout_settings else 100
     v_offset = layout_settings.get('v_offset', 0) if layout_settings else 0
     
-    command = ["ffmpeg", "-y", "-i", input_path]
+    # [핵심 변경] 입력 단계에서 미리 자르기 (Input Seeking)
+    # 이렇게 하면 처리 속도도 훨씬 빨라지고, 타임스탬프 오류도 해결됩니다.
+    command = ["ffmpeg", "-y"]
+    command.extend(["-ss", str(start_sec), "-to", str(end_sec), "-i", input_path])
     
-    # [핵심 수정] 템플릿 이미지를 무한 반복(-loop 1) 시켜서 영상 길이만큼 늘려줌
     if template_path:
+        # 템플릿은 자르지 않고 무한 반복
         command.extend(["-loop", "1", "-i", template_path])
-    
-    # -ss와 -to는 출력 파일의 길이를 제한하므로 마지막에 적용
     
     filter_complex = ""
     
@@ -112,8 +113,6 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
     if template_path:
         if video_on_top:
             # [CASE A] 영상 > 템플릿 (불투명 템플릿)
-            # setsar=1: 픽셀 비율 고정 (오류 방지)
-            # shortest=1: 영상이 끝나면 템플릿 반복도 멈춤
             filter_str = (
                 f"[1:v]scale=1080:1920,setsar=1[bg];"
                 f"[0:v]scale={target_width}:-2,setsar=1[fg];"
@@ -140,9 +139,8 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
     if template_path or filter_str != "format=yuv420p":
         command.extend(["-filter_complex", filter_str])
     
-    # 출력 시간 제한 및 인코딩 옵션
+    # 출력 시간 제한(-ss, -to)은 이미 입력 단계에서 처리했으므로 여기서는 제거
     command.extend([
-        "-ss", str(start_sec), "-to", str(end_sec), # 자르기
         "-c:v", "libx264", "-preset", "fast",
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k",
@@ -165,11 +163,11 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
 
 # --- UI 구성 ---
 
-# [업데이트] 버전: 김지연 3.4
-st.set_page_config(page_title="AI Shorts Maker Pro (김지연 3.4)", layout="wide")
+# [업데이트] 버전: 김지연 3.5
+st.set_page_config(page_title="AI Shorts Maker Pro (김지연 3.5)", layout="wide")
 
-st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 3.4)")
-st.markdown("Gemini 2.5 Flash | 템플릿 무한반복 패치 | **담당자: 김지연**")
+st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 3.5)")
+st.markdown("Gemini 2.5 Flash | **Input Seeking 패치 (오류 해결)** | **담당자: 김지연**")
 
 with st.sidebar:
     st.header("⚙️ 기본 설정")
