@@ -6,6 +6,7 @@ import json
 import time
 import subprocess
 import shutil
+import glob # 파일 찾기용 모듈 추가
 
 # --- 설정 ---
 DOWNLOAD_FOLDER = "downloads"
@@ -34,12 +35,29 @@ def download_video(url, cookie_path=None):
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info_dict = ydl.extract_info(url, download=True)
         if not info_dict:
-            raise ValueError("영상 정보를 가져올 수 없습니다. (차단되었거나 비공개 영상일 수 있습니다)")
+            raise ValueError("영상 정보를 가져올 수 없습니다.")
             
-        video_path = ydl.prepare_filename(info_dict)
         video_title = info_dict.get('title', 'video')
         video_id = info_dict.get('id', 'unknown')
         
+        # [김지연 3.8 핵심 수정] 실제 저장된 파일 찾기 (확장자 자동 감지)
+        # yt-dlp가 mp4가 아닌 mkv 등으로 저장할 경우를 대비해 ID로 파일을 검색합니다.
+        search_pattern = os.path.join(DOWNLOAD_FOLDER, f"{video_id}.*")
+        found_files = glob.glob(search_pattern)
+        
+        if not found_files:
+             # 혹시 못 찾으면 prepare_filename으로 추측
+            video_path = ydl.prepare_filename(info_dict)
+        else:
+            # 가장 가능성 높은 파일 선택 (보통 하나뿐임)
+            video_path = found_files[0]
+            
+        # 절대 경로로 변환 (FFmpeg 인식 오류 방지)
+        video_path = os.path.abspath(video_path)
+        
+        if not os.path.exists(video_path):
+             raise FileNotFoundError(f"파일이 다운로드된 것 같지만 찾을 수 없습니다: {video_path}")
+
     return video_path, video_title, video_id
 
 def analyze_video_points(api_key, video_path, user_prompt):
@@ -87,13 +105,16 @@ def parse_time_str(time_str):
 
 def process_video(input_path, start_sec, end_sec, video_id, index, template_path=None, chroma_key=None, layout_settings=None, video_on_top=True):
     """
-    [김지연 3.7 업데이트] Input Seeking 적용 및 에러 디버깅 강화
+    [김지연 3.8] 파일 경로 검증 로직 추가
     """
     output_filename = f"{video_id}_shorts_{index+1}.mp4"
-    # 절대 경로 사용으로 경로 문제 예방
     output_path = os.path.abspath(os.path.join(OUTPUT_FOLDER, output_filename))
     temp_cut_path = os.path.abspath(os.path.join(DOWNLOAD_FOLDER, f"temp_cut_{index}.mp4"))
-    input_path = os.path.abspath(input_path)
+    
+    # 입력 파일 존재 여부 재확인
+    if not os.path.exists(input_path):
+        st.error(f"❌ 원본 파일을 찾을 수 없습니다: {input_path}")
+        return None
     
     if template_path:
         template_path = os.path.abspath(template_path)
@@ -101,14 +122,13 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
     scale_pct = layout_settings.get('scale', 100) if layout_settings else 100
     v_offset = layout_settings.get('v_offset', 0) if layout_settings else 0
     
-    # --- [1단계] 영상 먼저 자르기 (Input Seeking 방식 적용) ---
-    # -ss를 -i 앞에 두면 훨씬 빠르고 오류가 적습니다.
+    # --- [1단계] 영상 먼저 자르기 (Input Seeking) ---
     cut_command = [
         "ffmpeg", "-y",
         "-ss", str(start_sec), "-to", str(end_sec),
         "-i", input_path,
         "-c:v", "libx264", "-preset", "fast",
-        "-pix_fmt", "yuv420p", # 픽셀 포맷 명시
+        "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k",
         "-strict", "experimental",
         temp_cut_path
@@ -123,12 +143,11 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
         subprocess.run(cut_command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo)
         
     except subprocess.CalledProcessError as e:
-        # 에러 발생 시 상세 로그 출력
         error_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
         st.error(f"❌ 1단계(자르기) 실패:\n{error_msg}")
         return None
 
-    # --- [2단계] 템플릿 합성 및 효과 적용 ---
+    # --- [2단계] 템플릿 합성 ---
     merge_command = ["ffmpeg", "-y", "-i", temp_cut_path]
     
     if template_path:
@@ -138,7 +157,6 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
     target_width = int(1080 * (scale_pct / 100))
     if target_width % 2 != 0: target_width -= 1
     
-    # 템플릿이 있는 경우
     if template_path:
         if video_on_top:
             # [CASE A] 영상 > 템플릿
@@ -161,7 +179,6 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
                 f"[vid][template]overlay=0:0:shortest=1,format=yuv420p"
             )
     else:
-        # 템플릿 없음 (포맷만 맞춤)
         filter_str = "format=yuv420p"
 
     if template_path or filter_str != "format=yuv420p":
@@ -179,7 +196,6 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
     try:
         subprocess.run(merge_command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo)
         
-        # 성공 시 임시 파일 삭제
         if os.path.exists(temp_cut_path):
             os.remove(temp_cut_path)
             
@@ -192,10 +208,10 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
 
 # --- UI 구성 ---
 
-st.set_page_config(page_title="AI Shorts Maker Pro (김지연 3.7)", layout="wide")
+st.set_page_config(page_title="AI Shorts Maker Pro (김지연 3.8)", layout="wide")
 
-st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 3.7)")
-st.markdown("Gemini 2.5 Flash | **Input Seeking + 상세 에러 분석** | **담당자: 김지연**")
+st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 3.8)")
+st.markdown("Gemini 2.5 Flash | **파일 경로 자동 보정 패치** | **담당자: 김지연**")
 
 with st.sidebar:
     st.header("⚙️ 기본 설정")
@@ -304,6 +320,7 @@ if run_process:
         with st.status("작업 진행 중...", expanded=True) as status:
             status.write("📥 영상 다운로드 중...")
             try:
+                # 쿠키 경로 전달
                 video_path, video_title, video_id = download_video(youtube_url, cookie_path)
             except Exception as e:
                 st.error(f"다운로드 실패: {e}")
