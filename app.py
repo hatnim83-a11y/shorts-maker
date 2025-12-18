@@ -27,6 +27,8 @@ def download_video(url, cookie_path=None):
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'ignoreerrors': True,
         'no_warnings': True,
+        # [김지연 3.9] 최종 결과물을 무조건 mp4로 병합하여 확장자 혼동 방지
+        'merge_output_format': 'mp4',
     }
     
     if cookie_path:
@@ -37,26 +39,37 @@ def download_video(url, cookie_path=None):
         if not info_dict:
             raise ValueError("영상 정보를 가져올 수 없습니다.")
             
-        video_title = info_dict.get('title', 'video')
         video_id = info_dict.get('id', 'unknown')
+        video_title = info_dict.get('title', 'video')
         
-        # [김지연 3.8 핵심 수정] 실제 저장된 파일 찾기 (확장자 자동 감지)
-        # yt-dlp가 mp4가 아닌 mkv 등으로 저장할 경우를 대비해 ID로 파일을 검색합니다.
-        search_pattern = os.path.join(DOWNLOAD_FOLDER, f"{video_id}.*")
-        found_files = glob.glob(search_pattern)
+        # [김지연 3.9 수정] 파일 찾기 로직 강화
+        # 1. 예상되는 파일 경로 (MP4 강제 옵션 덕분에 mp4일 확률 높음)
+        expected_filename = f"{video_id}.mp4"
+        video_path = os.path.join(DOWNLOAD_FOLDER, expected_filename)
         
-        if not found_files:
-             # 혹시 못 찾으면 prepare_filename으로 추측
-            video_path = ydl.prepare_filename(info_dict)
-        else:
-            # 가장 가능성 높은 파일 선택 (보통 하나뿐임)
-            video_path = found_files[0]
+        # 2. 만약 바로 안 보이면 glob으로 다시 검색 (혹시 mkv 등으로 저장되었을 경우 대비)
+        if not os.path.exists(video_path):
+            search_pattern = os.path.join(DOWNLOAD_FOLDER, f"{video_id}.*")
+            found_files = glob.glob(search_pattern)
             
-        # 절대 경로로 변환 (FFmpeg 인식 오류 방지)
+            # .part 파일(다운로드 중인 임시파일)은 제외
+            valid_files = [f for f in found_files if not f.endswith('.part')]
+            
+            if valid_files:
+                video_path = valid_files[0]
+        
+        # 절대 경로 변환
         video_path = os.path.abspath(video_path)
         
+        # 3. 최종 확인 및 디버깅 정보 제공
         if not os.path.exists(video_path):
-             raise FileNotFoundError(f"파일이 다운로드된 것 같지만 찾을 수 없습니다: {video_path}")
+             # 현재 폴더에 무슨 파일들이 있는지 확인 (디버깅용)
+             try:
+                 files_in_dir = os.listdir(DOWNLOAD_FOLDER)
+             except:
+                 files_in_dir = "폴더 조회 불가"
+                 
+             raise FileNotFoundError(f"파일을 찾을 수 없습니다: {video_path}\n📂 현재 다운로드 폴더 파일 목록: {files_in_dir}")
 
     return video_path, video_title, video_id
 
@@ -208,10 +221,10 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
 
 # --- UI 구성 ---
 
-st.set_page_config(page_title="AI Shorts Maker Pro (김지연 3.8)", layout="wide")
+st.set_page_config(page_title="AI Shorts Maker Pro (김지연 3.9)", layout="wide")
 
-st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 3.8)")
-st.markdown("Gemini 2.5 Flash | **파일 경로 자동 보정 패치** | **담당자: 김지연**")
+st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 3.9)")
+st.markdown("Gemini 2.5 Flash | **MP4 강제 변환 & 경로 추적 강화** | **담당자: 김지연**")
 
 with st.sidebar:
     st.header("⚙️ 기본 설정")
