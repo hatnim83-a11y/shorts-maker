@@ -14,17 +14,36 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 # --- 함수 정의 ---
 
-def download_video(url):
+def download_video(url, cookie_path=None):
+    """
+    YouTube URL에서 비디오 정보를 추출하고 다운로드합니다.
+    cookie_path: 로봇 차단 우회를 위한 쿠키 파일 경로 (선택 사항)
+    """
+    # [핵심] 로봇이 아닌 척 위장하는 설정들
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(id)s.%(ext)s'),
         'noplaylist': True,
+        # 1. 일반 브라우저인 척 위장 (User-Agent)
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        # 2. 자잘한 에러 무시
+        'ignoreerrors': True,
+        'no_warnings': True,
     }
+    
+    # [핵심] 쿠키 파일이 있다면 적용 (차단 뚫기 필살기)
+    if cookie_path:
+        ydl_opts['cookiefile'] = cookie_path
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info_dict = ydl.extract_info(url, download=True)
+        if not info_dict:
+            raise ValueError("영상 정보를 가져올 수 없습니다. (차단되었거나 비공개 영상일 수 있습니다)")
+            
         video_path = ydl.prepare_filename(info_dict)
         video_title = info_dict.get('title', 'video')
         video_id = info_dict.get('id', 'unknown')
+        
     return video_path, video_title, video_id
 
 def analyze_video_points(api_key, video_path, user_prompt):
@@ -74,7 +93,6 @@ def parse_time_str(time_str):
 def process_video(input_path, start_sec, end_sec, video_id, index, template_path=None, chroma_key=None, layout_settings=None, video_on_top=True):
     """
     영상 자르기 + 템플릿 적용 + 위치/크기 조절 + 레이어 순서 포함
-    (세로 모드 변환 기능 제거됨)
     """
     output_filename = f"{video_id}_shorts_{index+1}.mp4"
     output_path = os.path.join(OUTPUT_FOLDER, output_filename)
@@ -151,18 +169,35 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
 
 # --- UI 구성 ---
 
-st.set_page_config(page_title="AI Shorts Maker Pro (v3.2)", layout="wide")
+# [수정] 버전 표기 변경: v -> 김지연
+st.set_page_config(page_title="AI Shorts Maker Pro (김지연 3.3)", layout="wide")
 
-st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 3.2)")
-st.markdown("Gemini 2.5 Flash | 템플릿 적용 | 줌 설정 업데이트")
+st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 3.3)")
+st.markdown("Gemini 2.5 Flash | 클라우드 차단 우회 패치 | **담당자: 김지연**")
 
 with st.sidebar:
     st.header("⚙️ 기본 설정")
     api_key = st.text_input("Gemini API Key", type="password")
-    st.info("⚡ 안정적인 Gemini 2.5 Flash 모델 사용 중")
     
+    # [추가] 쿠키 파일 업로더
+    st.markdown("---")
+    st.warning("⚠️ 영상 다운로드가 안 되나요?")
+    uploaded_cookies = st.file_uploader(
+        "🍪 유튜브 쿠키 파일 (cookies.txt)", 
+        type=["txt"], 
+        help="서버 차단 시 'Get cookies.txt LOCALLY' 확장 프로그램으로 추출한 파일을 넣으세요."
+    )
+    
+    # 쿠키 파일 저장 처리
+    cookie_path = None
+    if uploaded_cookies:
+        cookie_path = os.path.join(DOWNLOAD_FOLDER, "cookies.txt")
+        with open(cookie_path, "wb") as f:
+            f.write(uploaded_cookies.getbuffer())
+        st.success("✅ 쿠키 적용됨 (차단 우회 모드)")
+    
+    st.markdown("---")
     st.header("🎨 템플릿 설정")
-    # 세로 모드 체크박스 제거됨
     
     uploaded_template = st.file_uploader(
         "🖼️ 템플릿 오버레이 (PNG/JPG)", 
@@ -204,7 +239,6 @@ with st.sidebar:
 
     st.markdown("---")
     with st.expander("📐 영상 배치 상세 설정 (Zoom/이동)", expanded=True):
-        # 줌 설정 변경: 최대 150, 5단위 이동
         scale_pct = st.slider("🔍 영상 크기 (Zoom)", 50, 150, 100, 5)
         v_offset = st.slider("↕️ 위아래 위치 이동", -500, 500, 0, 10)
         
@@ -254,7 +288,8 @@ if run_process:
         with st.status("작업 진행 중...", expanded=True) as status:
             status.write("📥 영상 다운로드 중...")
             try:
-                video_path, video_title, video_id = download_video(youtube_url)
+                # 쿠키 경로 전달 (선택사항)
+                video_path, video_title, video_id = download_video(youtube_url, cookie_path)
             except Exception as e:
                 st.error(f"다운로드 실패: {e}")
                 st.stop()
