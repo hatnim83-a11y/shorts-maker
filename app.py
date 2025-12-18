@@ -87,28 +87,34 @@ def parse_time_str(time_str):
 
 def process_video(input_path, start_sec, end_sec, video_id, index, template_path=None, chroma_key=None, layout_settings=None, video_on_top=True):
     """
-    [김지연 3.6 핵심 변경] 2단계 공정 (자르기 -> 합성) 적용으로 오류 해결
+    [김지연 3.7 업데이트] Input Seeking 적용 및 에러 디버깅 강화
     """
     output_filename = f"{video_id}_shorts_{index+1}.mp4"
-    output_path = os.path.join(OUTPUT_FOLDER, output_filename)
-    temp_cut_path = os.path.join(DOWNLOAD_FOLDER, f"temp_cut_{index}.mp4")
+    # 절대 경로 사용으로 경로 문제 예방
+    output_path = os.path.abspath(os.path.join(OUTPUT_FOLDER, output_filename))
+    temp_cut_path = os.path.abspath(os.path.join(DOWNLOAD_FOLDER, f"temp_cut_{index}.mp4"))
+    input_path = os.path.abspath(input_path)
+    
+    if template_path:
+        template_path = os.path.abspath(template_path)
     
     scale_pct = layout_settings.get('scale', 100) if layout_settings else 100
     v_offset = layout_settings.get('v_offset', 0) if layout_settings else 0
     
-    # --- [1단계] 영상 먼저 자르기 (재인코딩으로 싱크/타임스탬프 완벽 보정) ---
+    # --- [1단계] 영상 먼저 자르기 (Input Seeking 방식 적용) ---
+    # -ss를 -i 앞에 두면 훨씬 빠르고 오류가 적습니다.
     cut_command = [
         "ffmpeg", "-y",
-        "-i", input_path,
         "-ss", str(start_sec), "-to", str(end_sec),
+        "-i", input_path,
         "-c:v", "libx264", "-preset", "fast",
+        "-pix_fmt", "yuv420p", # 픽셀 포맷 명시
         "-c:a", "aac", "-b:a", "192k",
         "-strict", "experimental",
         temp_cut_path
     ]
     
     try:
-        # 윈도우 팝업 숨김
         startupinfo = None
         if os.name == 'nt':
             startupinfo = subprocess.STARTUPINFO()
@@ -117,11 +123,12 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
         subprocess.run(cut_command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo)
         
     except subprocess.CalledProcessError as e:
-        st.error(f"1단계(자르기) 실패: {e}")
+        # 에러 발생 시 상세 로그 출력
+        error_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+        st.error(f"❌ 1단계(자르기) 실패:\n{error_msg}")
         return None
 
     # --- [2단계] 템플릿 합성 및 효과 적용 ---
-    # 이제 입력은 원본이 아니라, 이미 잘려진 temp_cut_path 입니다.
     merge_command = ["ffmpeg", "-y", "-i", temp_cut_path]
     
     if template_path:
@@ -179,15 +186,16 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
         return output_path
         
     except subprocess.CalledProcessError as e:
-        st.error(f"2단계(합성) 실패: {e}")
+        error_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+        st.error(f"❌ 2단계(합성) 실패:\n{error_msg}")
         return None
 
 # --- UI 구성 ---
 
-st.set_page_config(page_title="AI Shorts Maker Pro (김지연 3.6)", layout="wide")
+st.set_page_config(page_title="AI Shorts Maker Pro (김지연 3.7)", layout="wide")
 
-st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 3.6)")
-st.markdown("Gemini 2.5 Flash | **2-Step 공정 (오류 완전 해결)** | **담당자: 김지연**")
+st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 3.7)")
+st.markdown("Gemini 2.5 Flash | **Input Seeking + 상세 에러 분석** | **담당자: 김지연**")
 
 with st.sidebar:
     st.header("⚙️ 기본 설정")
