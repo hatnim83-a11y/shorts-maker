@@ -23,14 +23,20 @@ def download_video(url, cookie_path=None):
     # [김지연 4.0] 파일명 패턴 고정
     output_template = os.path.join(DOWNLOAD_FOLDER, 'video_%(id)s.%(ext)s')
     
-    # [김지연 4.1] 403 에러 회피를 위한 옵션 최적화
+    # [김지연 4.2] 403 에러 해결을 위한 클라이언트 위장 (Android 모드)
     ydl_opts = {
-        # 1. 포맷 제약 완화: 특정 코덱을 강제하지 않고 '가장 좋은 것'을 받아 나중에 mp4로 변환
         'format': 'bestvideo+bestaudio/best',
         'outtmpl': output_template,
         'noplaylist': True,
         
-        # 2. 브라우저 헤더 모방 (봇 탐지 회피)
+        # 1. 안드로이드 모바일 앱인 척 위장 (가장 강력한 우회 방법)
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],
+            }
+        },
+        
+        # 2. 브라우저 헤더 모방
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -41,8 +47,6 @@ def download_video(url, cookie_path=None):
         'ignoreerrors': False,
         'no_warnings': False,
         'quiet': False,
-        
-        # 최종 결과물을 무조건 mp4로 병합 (확장자 통일)
         'merge_output_format': 'mp4',
     }
     
@@ -86,7 +90,6 @@ def download_video(url, cookie_path=None):
         return video_path, video_title, video_id
 
     except yt_dlp.utils.DownloadError as e:
-        # 403 등 다운로드 에러 메시지 그대로 전달
         raise RuntimeError(f"{str(e)}")
     except Exception as e:
         raise RuntimeError(f"다운로드 중 알 수 없는 오류 발생:\n{str(e)}")
@@ -239,10 +242,10 @@ def process_video(input_path, start_sec, end_sec, video_id, index, template_path
 
 # --- UI 구성 ---
 
-st.set_page_config(page_title="AI Shorts Maker Pro (김지연 4.1)", layout="wide")
+st.set_page_config(page_title="AI Shorts Maker Pro (김지연 4.2)", layout="wide")
 
-st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 4.1)")
-st.markdown("Gemini 2.5 Flash | **403 에러 회피 패치** | **담당자: 김지연**")
+st.title("🎬 AI 숏폼 자동 생성기 Pro (김지연 4.2)")
+st.markdown("Gemini 2.5 Flash | **Android 클라이언트 위장 패치** | **담당자: 김지연**")
 
 with st.sidebar:
     st.header("⚙️ 기본 설정")
@@ -366,9 +369,11 @@ if run_process:
                     st.warning("🚨 **HTTP Error 403 감지됨!**")
                     st.info("""
                     유튜브가 현재 서버(클라우드)의 접근을 차단했습니다.
-                    왼쪽 사이드바의 **'🍪 유튜브 쿠키 파일'**을 업로드해야만 해결됩니다.
+                    **[해결 방법 1단계]** 위장술이 적용된 현재 버전(김지연 4.2)으로 다시 시도해보세요.
                     
-                    **[해결 방법]**
+                    **[해결 방법 2단계]** 그래도 안 된다면 쿠키 파일이 필수입니다.
+                    왼쪽 사이드바의 **'🍪 유튜브 쿠키 파일'**을 업로드해주세요.
+                    
                     1. 크롬 확장프로그램 **'Get cookies.txt LOCALLY'** 설치
                     2. 유튜브 홈페이지 접속 후 확장프로그램 아이콘 클릭 -> **'Export'**
                     3. 다운받은 txt 파일을 왼쪽 사이드바에 업로드하고 다시 실행하세요.
